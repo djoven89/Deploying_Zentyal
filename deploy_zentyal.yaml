@@ -1,0 +1,105 @@
+---
+
+- hosts: zentyal_server
+  vars:
+    - zentyal_hostname: "node01.lab.lan"
+    - zentyal_timezone: "Europe/Madrid"
+    - zentyal_admin: "zenadmin"
+    # To generate the password, run this command: mkpasswd --method=sha-512
+    - zentyal_admin_password: "$6$d4iZ9cQghL$JBbqotNsfKiflCK4z.nwp5drlFvsI5MTxxrVEbvwu38qtUvH8GaFviIDvbivN0Csc72pvaQLAeih/raVJbk0b0" 
+    - system_language: "es_ES.UTF-8"
+    - system_keyboard: "es pc105"
+  
+  tasks:
+
+    - name: Updating the server
+      apt:
+        update_cache: true
+        upgrade: true 
+        force_apt_get: true
+
+    - name: Checking if there are any broken package
+      shell: "dpkg -l |egrep -v '^ii|rc' | awk '{if(NR>5)print}' | wc -l"
+      register: pkg_check
+      failed_when: pkg_check.stdout > "1"
+
+    - name: Adding the key repository for Zentyal 6.1
+      apt_key:
+        url: http://keys.zentyal.org/zentyal-6.1-packages.asc
+        state: present
+
+    - name: Adding the repository for Zentyal 6.1
+      apt_repository:
+        repo: deb http://packages.zentyal.org/zentyal 6.1 main extra
+        state: present
+
+    - name: Installing Zentyal 6.1
+      apt:
+        name: 
+          - zentyal-core
+          - zentyal-software
+          - zentyal-network
+        state: latest
+        force_apt_get: true
+        update_cache: true
+
+    - name: Workaround to avoid network issue when the Network module is not configured and enabled
+      systemd:
+        name: systemd-resolved
+        state: started
+
+    - name: Checking if there are any broken package
+      shell: "dpkg -l |egrep -v '^ii|rc' | awk '{if(NR>5)print}' | wc -l"
+      register: pkg_check
+      failed_when: pkg_check.stdout > "1"
+
+    - name: Checking if the Webadmin module is listening
+      shell: "ss -tunlp | grep :8443"
+      register: webadmin
+      failed_when: webadmin.rc == 1
+
+    - name: Creating an admin user who will have access to the Webadmin
+      user:
+        name: "{{ zentyal_admin }}"
+        shell: /bin/bash
+        groups: sudo
+        append: yes
+        password: "{{ zentyal_admin_password }}"
+
+    - name: Setting up the hostname
+      hostname:
+        name: "{{ zentyal_hostname }}"
+      when: ansible_fqdn != zentyal_hostname
+
+    - name: Removing any entry which contains the hostname
+      lineinfile:
+        path: /etc/hosts
+        regexp: ".* {{ zentyal_hostname }}.*"
+        state: absent
+
+    - name: Adding the hostname to the 'hosts' configuration file
+      lineinfile:
+        path: /etc/hosts
+        regexp: '^127.0.1.1.*'
+        line: "127.0.1.1 {{ ansible_fqdn }} {{ ansible_hostname }}"
+        state: present
+
+    - name: Setting up the timezone
+      timezone:
+        name: "{{ zentyal_timezone }}"
+      notify: cron restart
+
+    - name: Setting up the language of the system and the keyboard
+      shell: "localectl set-locale LANG={{ system_language }} && localectl set-keymap {{ system_keyboard }}"
+
+    - name: Final message
+      debug:
+        msg: "The installation of Zentyal 6.1 has finished successfully. You can access using the URL: https://{{ ansible_default_ipv4['address'] }}:8443"
+
+  handlers:
+    - name: cron restart
+      systemd:
+        name: cron
+        state: restarted
+
+...
